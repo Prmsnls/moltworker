@@ -10,6 +10,11 @@ CLAWDBOT_DEV_MODE=true
 # Optional - set a fixed token instead of auto-generated
 CLAWDBOT_GATEWAY_TOKEN=dev-token-123
 
+# Cloudflare Access configuration for /_admin and /api routes
+# Required for admin UI and device pairing API
+# CF_ACCESS_TEAM_DOMAIN=myteam.cloudflareaccess.com
+# CF_ACCESS_AUD=your-application-audience-tag
+
 # Optional chat channels
 # TELEGRAM_BOT_TOKEN=optional
 # DISCORD_BOT_TOKEN=optional

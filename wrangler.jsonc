@@ -7,6 +7,26 @@
   "observability": {
     "enabled": true
   },
+  // Static assets for admin UI (built by vite)
+  "assets": {
+    "directory": "./dist/client",
+    "not_found_handling": "single-page-application",
+    "html_handling": "auto-trailing-slash",
+    "binding": "ASSETS",
+    "run_worker_first": true
+  },
+  // Allow importing HTML files as text modules
+  "rules": [
+    {
+      "type": "Text",
+      "globs": ["**/*.html"],
+      "fallthrough": false
+    }
+  ],
+  // Build command for vite
+  "build": {
+    "command": "npm run build"
+  },
   // Container configuration for the Clawdbot sandbox
   "containers": [
     {
@@ -28,12 +48,26 @@
       "new_sqlite_classes": ["Sandbox"],
       "tag": "v1"
     }
+  ],
+  // R2 bucket for persistent storage (clawdbot data, conversations, etc.)
+  "r2_buckets": [
+    {
+      "binding": "CLAWDBOT_BUCKET",
+      "bucket_name": "clawdbot-data"
+    }
   ]
   // Secrets to configure via `wrangler secret put`:
   // - ANTHROPIC_API_KEY: Your Anthropic API key
+  // - CF_ACCESS_TEAM_DOMAIN: Cloudflare Access team domain
+  // - CF_ACCESS_AUD: Cloudflare Access application audience
   // - TELEGRAM_BOT_TOKEN: (optional) Telegram bot token
   // - DISCORD_BOT_TOKEN: (optional) Discord bot token
   // - SLACK_BOT_TOKEN: (optional) Slack bot token
   // - SLACK_APP_TOKEN: (optional) Slack app token
-  // - CLAWDBOT_GATEWAY_TOKEN: (optional) Token to protect gateway access
+  // - CLAWDBOT_GATEWAY_TOKEN: (optional) Token to protect gateway access, if unset device pairing will be used
+  //
+  // R2 persistent storage secrets (required for data persistence across sessions):
+  // - AWS_ACCESS_KEY_ID: R2 access key ID (from R2 API tokens)
+  // - AWS_SECRET_ACCESS_KEY: R2 secret access key (from R2 API tokens)
+  // - CF_ACCOUNT_ID: Your Cloudflare account ID (for R2 endpoint URL)
 }

@@ -2,6 +2,24 @@
 
 import type { Sandbox } from '@cloudflare/sandbox';
 
+// Allow importing HTML files as strings
+declare module '*.html' {
+  const content: string;
+  export default content;
+}
+
+// Allow importing CSS files as strings
+declare module '*.css' {
+  const content: string;
+  export default content;
+}
+
+// Allow importing JS files as strings
+declare module '*.js' {
+  const content: string;
+  export default content;
+}
+
 declare global {
   interface Env {
     Sandbox: DurableObjectNamespace<Sandbox>;
