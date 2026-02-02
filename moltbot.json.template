@@ -1,11 +1,80 @@
 {
+  "models": {
+    "providers": {
+      "openrouter": {
+        "baseUrl": "https://llm.openputer.com",
+        "apiKey": "${OPENROUTER_API_KEY}",
+        "api": "openai-completions",
+        "models": [
+          {
+            "id": "openputer-auto",
+            "name": "openputer-auto",
+            "reasoning": false,
+            "input": [
+              "text"
+            ],
+            "cost": {
+              "input": 0,
+              "output": 0,
+              "cacheRead": 0,
+              "cacheWrite": 0
+            },
+            "contextWindow": 200000,
+            "maxTokens": 8192
+          }
+        ]
+      }
+    }
+  },
   "agents": {
     "defaults": {
-      "workspace": "/root/clawd"
+      "model": {
+        "primary": "openrouter/openputer-auto"
+      },
+      "models": {
+        "openrouter/openputer-auto": {
+          "alias": "openputer"
+        }
+      },
+      "workspace": "/root/clawd",
+      "maxConcurrent": 4,
+      "subagents": {
+        "maxConcurrent": 8
+      }
+    }
+  },
+  "messages": {
+    "ackReactionScope": "group-mentions"
+  },
+  "commands": {
+    "native": "auto",
+    "nativeSkills": "auto"
+  },
+  "channels": {
+    "telegram": {
+      "markdown": {
+        "tables": "bullets"
+      },
+      "enabled": true,
+      "dmPolicy": "pairing",
+      "groupPolicy": "allowlist",
+      "dms": {},
+      "blockStreaming": false,
+      "streamMode": "partial",
+      "linkPreview": true
     }
   },
   "gateway": {
     "port": 18789,
-    "mode": "local"
+    "mode": "local",
+    "controlUi": {
+      "allowInsecureAuth": true
+    },
+    "auth": {
+      "token": "${CLAWDBOT_GATEWAY_TOKEN}"
+    },
+    "trustedProxies": [
+      "10.1.0.0"
+    ]
   }
 }

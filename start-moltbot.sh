@@ -149,7 +149,12 @@ try {
 // Ensure nested objects exist
 config.agents = config.agents || {};
 config.agents.defaults = config.agents.defaults || {};
-config.agents.defaults.model = config.agents.defaults.model || {};
+// Normalize model config: it can be a string ("provider/model") or an object.
+if (typeof config.agents.defaults.model === 'string') {
+    config.agents.defaults.model = { primary: config.agents.defaults.model };
+} else {
+    config.agents.defaults.model = config.agents.defaults.model || {};
+}
 config.gateway = config.gateway || {};
 config.channels = config.channels || {};
 
@@ -169,12 +174,6 @@ if (config.models?.providers?.anthropic?.models) {
 config.gateway.port = 18789;
 config.gateway.mode = 'local';
 config.gateway.trustedProxies = ['10.1.0.0'];
-
-// Set gateway token if provided
-if (process.env.CLAWDBOT_GATEWAY_TOKEN) {
-    config.gateway.auth = config.gateway.auth || {};
-    config.gateway.auth.token = process.env.CLAWDBOT_GATEWAY_TOKEN;
-}
 
 // Allow insecure auth for dev mode
 if (process.env.CLAWDBOT_DEV_MODE === 'true') {
@@ -228,8 +227,16 @@ if (process.env.SLACK_BOT_TOKEN && process.env.SLACK_APP_TOKEN) {
 //   https://gateway.ai.cloudflare.com/v1/{account_id}/{gateway_id}/openai
 const baseUrl = (process.env.AI_GATEWAY_BASE_URL || process.env.ANTHROPIC_BASE_URL || '').replace(/\/+$/, '');
 const isOpenAI = baseUrl.endsWith('/openai');
+const hasProviderConfig = !!(config.models && config.models.providers && Object.keys(config.models.providers).length > 0);
+const hasPrimaryModel =
+    !!(config.agents && config.agents.defaults && config.agents.defaults.model &&
+        typeof config.agents.defaults.model.primary === 'string' &&
+        config.agents.defaults.model.primary.trim().length > 0);
+const forceProviderConfig = process.env.CLAWDBOT_FORCE_PROVIDER_CONFIG === 'true';
 
-if (isOpenAI) {
+if ((hasProviderConfig || hasPrimaryModel) && !forceProviderConfig) {
+    console.log('Config already specifies providers/model; skipping provider auto-configuration');
+} else if (isOpenAI) {
     // Create custom openai provider config with baseUrl override
     // Omit apiKey so moltbot falls back to OPENAI_API_KEY env var
     console.log('Configuring OpenAI provider with base URL:', baseUrl);
@@ -274,7 +281,7 @@ if (isOpenAI) {
     config.agents.defaults.models['anthropic/claude-sonnet-4-5-20250929'] = { alias: 'Sonnet 4.5' };
     config.agents.defaults.models['anthropic/claude-haiku-4-5-20251001'] = { alias: 'Haiku 4.5' };
     config.agents.defaults.model.primary = 'anthropic/claude-opus-4-5-20251101';
-} else {
+} else if (!hasPrimaryModel) {
     // Default to Anthropic without custom base URL (uses built-in pi-ai catalog)
     config.agents.defaults.model.primary = 'anthropic/claude-opus-4-5';
 }
