@@ -20,7 +20,11 @@ CONFIG_DIR="/root/.clawdbot"
 CONFIG_FILE="$CONFIG_DIR/clawdbot.json"
 TEMPLATE_DIR="/root/.clawdbot-templates"
 TEMPLATE_FILE="$TEMPLATE_DIR/moltbot.json.template"
-BACKUP_DIR="/data/moltbot"
+if [ -n "$TENANT_SLUG" ]; then
+    BACKUP_DIR="/data/moltbot/tenants/$TENANT_SLUG"
+else
+    BACKUP_DIR="/data/moltbot"
+fi
 
 echo "Config directory: $CONFIG_DIR"
 echo "Backup directory: $BACKUP_DIR"
@@ -189,7 +193,7 @@ if (process.env.TELEGRAM_BOT_TOKEN) {
     const telegramDmPolicy = process.env.TELEGRAM_DM_POLICY || 'pairing';
     config.channels.telegram.dmPolicy = telegramDmPolicy;
     if (process.env.TELEGRAM_DM_ALLOW_FROM) {
-        // Explicit allowlist: "123,456,789" → ['123', '456', '789']
+        // Explicit allowlist: "123,456,789" -> ['123', '456', '789']
         config.channels.telegram.allowFrom = process.env.TELEGRAM_DM_ALLOW_FROM.split(',');
     } else if (telegramDmPolicy === 'open') {
         // "open" policy requires allowFrom: ["*"]
@@ -255,7 +259,7 @@ if ((hasProviderConfig || hasPrimaryModel) && !forceProviderConfig) {
     config.agents.defaults.models = config.agents.defaults.models || {};
     config.agents.defaults.models['openai/gpt-5.2'] = { alias: 'GPT-5.2' };
     config.agents.defaults.models['openai/gpt-5'] = { alias: 'GPT-5' };
-    config.agents.defaults.models['openai/gpt-4.5-preview'] = { alias: 'GPT-4.5' };
+    config.agents.defaults.models['openai/gpt-4.5-preview'] = { alias: 'GPT-5' };
     config.agents.defaults.model.primary = 'openai/gpt-5.2';
 } else if (baseUrl) {
     console.log('Configuring Anthropic provider with base URL:', baseUrl);
