@@ -27,7 +27,8 @@ import type { AppEnv, MoltbotEnv } from './types';
 import { MOLTBOT_PORT } from './config';
 import { createAccessMiddleware } from './auth';
 import { ensureMoltbotGateway, findExistingMoltbotProcess, syncToR2 } from './gateway';
-import { publicRoutes, api, adminUi, debug, cdp } from './routes';
+import { publicRoutes, api, adminUi, debug, cdp, platformRoutes } from './routes';
+import { getTenantConfig, resolveTenantSlug } from './platform/tenant';
 import { redactSensitiveParams } from './utils/logging';
 import loadingPageHtml from './assets/loading.html';
 import configErrorHtml from './assets/config-error.html';
@@ -48,6 +49,7 @@ function transformErrorMessage(message: string, host: string): string {
 }
 
 export { Sandbox };
+export { TenantConfigDO } from './platform/tenantConfig';
 
 /**
  * Validate required environment variables.
@@ -72,15 +74,17 @@ function validateRequiredEnv(env: MoltbotEnv): string[] {
     }
   }
 
-  // Check for AI Gateway or direct Anthropic configuration
+  // Check for AI Gateway or direct provider configuration
   if (env.AI_GATEWAY_API_KEY) {
     // AI Gateway requires both API key and base URL
     if (!env.AI_GATEWAY_BASE_URL) {
       missing.push('AI_GATEWAY_BASE_URL (required when using AI_GATEWAY_API_KEY)');
     }
+  } else if (env.OPENROUTER_API_KEY) {
+    // OpenRouter-compatible provider is configured via OPENROUTER_API_KEY
   } else if (!env.ANTHROPIC_API_KEY) {
     // Direct Anthropic access requires API key
-    missing.push('ANTHROPIC_API_KEY or AI_GATEWAY_API_KEY');
+    missing.push('OPENROUTER_API_KEY, ANTHROPIC_API_KEY, or AI_GATEWAY_API_KEY');
   }
 
   return missing;
@@ -88,11 +92,11 @@ function validateRequiredEnv(env: MoltbotEnv): string[] {
 
 /**
  * Build sandbox options based on environment configuration.
- * 
+ *
  * SANDBOX_SLEEP_AFTER controls how long the container stays alive after inactivity:
  * - 'never' (default): Container stays alive indefinitely (recommended due to long cold starts)
  * - Duration string: e.g., '10m', '1h', '30s' - container sleeps after this period of inactivity
- * 
+ *
  * To reduce costs at the expense of cold start latency, set SANDBOX_SLEEP_AFTER to a duration:
  *   npx wrangler secret put SANDBOX_SLEEP_AFTER
  *   # Enter: 10m (or 1h, 30m, etc.)
@@ -112,6 +116,9 @@ function buildSandboxOptions(env: MoltbotEnv): SandboxOptions {
 // Main app
 const app = new Hono<AppEnv>();
 
+// Platform management routes must be reachable without tenant context.
+app.route('/', platformRoutes);
+
 // =============================================================================
 // MIDDLEWARE: Applied to ALL routes
 // =============================================================================
@@ -129,8 +136,35 @@ app.use('*', async (c, next) => {
 
 // Middleware: Initialize sandbox for all requests
 app.use('*', async (c, next) => {
+  const url = new URL(c.req.url);
+  if (url.pathname.startsWith('/__platform')) {
+    return next();
+  }
+
+  if (c.env.PLATFORM_MODE === 'true') {
+    const slug = resolveTenantSlug(c.req.raw, c.env);
+    const publicDomain = (c.env.PUBLIC_DOMAIN || 'workers.openputer.com').trim();
+    if (!slug) {
+      if (url.hostname === publicDomain) {
+        return c.text('OK - use {slug}.' + publicDomain, 200);
+      }
+      return c.text('Missing tenant (use {slug}.' + publicDomain + ' or ?tenant=...)', 400);
+    }
+    c.set('tenantSlug', slug);
+    try {
+      const cfg = await getTenantConfig(c.env, slug);
+      if (cfg) c.set('tenantConfig', cfg);
+    } catch (e) {
+      console.error('[TENANT] Failed to load config for', slug, e);
+    }
+  }
+
   const options = buildSandboxOptions(c.env);
-  const sandbox = getSandbox(c.env.Sandbox, 'moltbot', options);
+  const sandboxName =
+    c.env.PLATFORM_MODE === 'true' && c.get('tenantSlug')
+      ? `tenant:${c.get('tenantSlug')}`
+      : 'moltbot';
+  const sandbox = getSandbox(c.env.Sandbox, sandboxName, options);
   c.set('sandbox', sandbox);
   await next();
 });
@@ -152,6 +186,9 @@ app.route('/cdp', cdp);
 
 // Middleware: Validate required environment variables (skip in dev mode and for debug routes)
 app.use('*', async (c, next) => {
+  if (c.env.PLATFORM_MODE === 'true') {
+    return next();
+  }
   const url = new URL(c.req.url);
 
   // Skip validation for debug routes (they have their own enable check)
@@ -176,12 +213,15 @@ app.use('*', async (c, next) => {
     }
 
     // Return JSON error for API requests
-    return c.json({
-      error: 'Configuration error',
-      message: 'Required environment variables are not configured',
-      missing: missingVars,
-      hint: 'Set these using: wrangler secret put <VARIABLE_NAME>',
-    }, 503);
+    return c.json(
+      {
+        error: 'Configuration error',
+        message: 'Required environment variables are not configured',
+        missing: missingVars,
+        hint: 'Set these using: wrangler secret put <VARIABLE_NAME>',
+      },
+      503,
+    );
   }
 
   return next();
@@ -189,11 +229,14 @@ app.use('*', async (c, next) => {
 
 // Middleware: Cloudflare Access authentication for protected routes
 app.use('*', async (c, next) => {
+  if (c.env.PLATFORM_MODE === 'true') {
+    return next();
+  }
   // Determine response type based on Accept header
   const acceptsHtml = c.req.header('Accept')?.includes('text/html');
   const middleware = createAccessMiddleware({
     type: acceptsHtml ? 'html' : 'json',
-    redirectOnMissing: acceptsHtml
+    redirectOnMissing: acceptsHtml,
   });
 
   return middleware(c, next);
@@ -201,6 +244,24 @@ app.use('*', async (c, next) => {
 
 // Mount API routes (protected by Cloudflare Access)
 app.route('/api', api);
+
+// In platform mode, protect /_admin/* with the tenant gateway token.
+app.use('/_admin/*', async (c, next) => {
+  if (c.env.PLATFORM_MODE !== 'true') return next();
+
+  const url = new URL(c.req.url);
+  if (url.pathname.startsWith('/_admin/assets/')) return next();
+
+  const cfg = c.get('tenantConfig');
+  if (!cfg) return c.text('Tenant not configured', 404);
+
+  const token = url.searchParams.get('token') || '';
+  if (!token || token !== cfg.gatewayToken) {
+    return c.text('Unauthorized', 401);
+  }
+
+  return next();
+});
 
 // Mount Admin UI routes (protected by Cloudflare Access)
 app.route('/_admin', adminUi);
@@ -238,9 +299,9 @@ app.all('*', async (c) => {
 
     // Start the gateway in the background (don't await)
     c.executionCtx.waitUntil(
-      ensureMoltbotGateway(sandbox, c.env).catch((err: Error) => {
+      ensureMoltbotGateway(sandbox, c.env, c.get('tenantConfig')).catch((err: Error) => {
         console.error('[PROXY] Background gateway start failed:', err);
-      })
+      }),
     );
 
     // Return the loading page immediately
@@ -249,23 +310,38 @@ app.all('*', async (c) => {
 
   // Ensure moltbot is running (this will wait for startup)
   try {
-    await ensureMoltbotGateway(sandbox, c.env);
+    const cfg = c.get('tenantConfig');
+    if (c.env.PLATFORM_MODE === 'true' && !cfg) {
+      return c.json(
+        {
+          error: 'Tenant not configured',
+          details: 'This tenant has not been provisioned yet',
+        },
+        404,
+      );
+    }
+    await ensureMoltbotGateway(sandbox, c.env, cfg);
   } catch (error) {
     console.error('[PROXY] Failed to start Moltbot:', error);
     const errorMessage = error instanceof Error ? error.message : 'Unknown error';
 
     let hint = 'Check worker logs with: wrangler tail';
-    if (!c.env.ANTHROPIC_API_KEY) {
-      hint = 'ANTHROPIC_API_KEY is not set. Run: wrangler secret put ANTHROPIC_API_KEY';
+    if (c.env.PLATFORM_MODE === 'true' && !c.get('tenantConfig')?.openrouterApiKey) {
+      hint = 'OPENROUTER_API_KEY is not set for this tenant (provisioning incomplete)';
+    } else if (!c.env.ANTHROPIC_API_KEY && !c.env.OPENROUTER_API_KEY && !c.env.AI_GATEWAY_API_KEY) {
+      hint = 'Provider key is not set. Run: wrangler secret put OPENROUTER_API_KEY (or ANTHROPIC_API_KEY)';
     } else if (errorMessage.includes('heap out of memory') || errorMessage.includes('OOM')) {
       hint = 'Gateway ran out of memory. Try again or check for memory leaks.';
     }
 
-    return c.json({
-      error: 'Moltbot gateway failed to start',
-      details: errorMessage,
-      hint,
-    }, 503);
+    return c.json(
+      {
+        error: 'Moltbot gateway failed to start',
+        details: errorMessage,
+        hint,
+      },
+      503,
+    );
   }
 
   // Proxy to Moltbot with WebSocket message interception
@@ -278,11 +354,9 @@ app.all('*', async (c) => {
       console.log('[WS] URL:', url.pathname + redactedSearch);
     }
 
-    // Get WebSocket connection to the container
     const containerResponse = await sandbox.wsConnect(request, MOLTBOT_PORT);
     console.log('[WS] wsConnect response status:', containerResponse.status);
 
-    // Get the container-side WebSocket
     const containerWs = containerResponse.webSocket;
     if (!containerWs) {
       console.error('[WS] No WebSocket in container response - falling back to direct proxy');
@@ -293,10 +367,8 @@ app.all('*', async (c) => {
       console.log('[WS] Got container WebSocket, setting up interception');
     }
 
-    // Create a WebSocket pair for the client
     const [clientWs, serverWs] = Object.values(new WebSocketPair());
 
-    // Accept both WebSockets
     serverWs.accept();
     containerWs.accept();
 
@@ -306,10 +378,13 @@ app.all('*', async (c) => {
       console.log('[WS] serverWs.readyState:', serverWs.readyState);
     }
 
-    // Relay messages from client to container
     serverWs.addEventListener('message', (event) => {
       if (debugLogs) {
-        console.log('[WS] Client -> Container:', typeof event.data, typeof event.data === 'string' ? event.data.slice(0, 200) : '(binary)');
+        console.log(
+          '[WS] Client -> Container:',
+          typeof event.data,
+          typeof event.data === 'string' ? event.data.slice(0, 200) : '(binary)',
+        );
       }
       if (containerWs.readyState === WebSocket.OPEN) {
         containerWs.send(event.data);
@@ -318,14 +393,16 @@ app.all('*', async (c) => {
       }
     });
 
-    // Relay messages from container to client, with error transformation
     containerWs.addEventListener('message', (event) => {
       if (debugLogs) {
-        console.log('[WS] Container -> Client (raw):', typeof event.data, typeof event.data === 'string' ? event.data.slice(0, 500) : '(binary)');
+        console.log(
+          '[WS] Container -> Client (raw):',
+          typeof event.data,
+          typeof event.data === 'string' ? event.data.slice(0, 500) : '(binary)',
+        );
       }
       let data = event.data;
 
-      // Try to intercept and transform error messages
       if (typeof data === 'string') {
         try {
           const parsed = JSON.parse(data);
@@ -356,7 +433,6 @@ app.all('*', async (c) => {
       }
     });
 
-    // Handle close events
     serverWs.addEventListener('close', (event) => {
       if (debugLogs) {
         console.log('[WS] Client closed:', event.code, event.reason);
@@ -368,7 +444,6 @@ app.all('*', async (c) => {
       if (debugLogs) {
         console.log('[WS] Container closed:', event.code, event.reason);
       }
-      // Transform the close reason (truncate to 123 bytes max for WebSocket spec)
       let reason = transformErrorMessage(event.reason, url.host);
       if (reason.length > 123) {
         reason = reason.slice(0, 120) + '...';
@@ -379,7 +454,6 @@ app.all('*', async (c) => {
       serverWs.close(event.code, reason);
     });
 
-    // Handle errors
     serverWs.addEventListener('error', (event) => {
       console.error('[WS] Client error:', event);
       containerWs.close(1011, 'Client error');
@@ -403,7 +477,6 @@ app.all('*', async (c) => {
   const httpResponse = await sandbox.containerFetch(request, MOLTBOT_PORT);
   console.log('[HTTP] Response status:', httpResponse.status);
 
-  // Add debug header to verify worker handled the request
   const newHeaders = new Headers(httpResponse.headers);
   newHeaders.set('X-Worker-Debug', 'proxy-to-moltbot');
   newHeaders.set('X-Debug-Path', url.pathname);
@@ -422,13 +495,17 @@ app.all('*', async (c) => {
 async function scheduled(
   _event: ScheduledEvent,
   env: MoltbotEnv,
-  _ctx: ExecutionContext
+  _ctx: ExecutionContext,
 ): Promise<void> {
+  if (env.PLATFORM_MODE === 'true') {
+    console.log('[cron] PLATFORM_MODE enabled; skipping scheduled sync');
+    return;
+  }
   const options = buildSandboxOptions(env);
   const sandbox = getSandbox(env.Sandbox, 'moltbot', options);
 
   console.log('[cron] Starting backup sync to R2...');
-  const result = await syncToR2(sandbox, env);
+  const result = await syncToR2(sandbox, env, 'default');
 
   if (result.success) {
     console.log('[cron] Backup sync completed successfully at', result.lastSync);

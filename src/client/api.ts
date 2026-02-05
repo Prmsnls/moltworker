@@ -3,6 +3,14 @@
 
 const API_BASE = '/api/admin';
 
+function getGatewayToken(): string {
+  try {
+    return new URL(window.location.href).searchParams.get('token')?.trim() || '';
+  } catch {
+    return '';
+  }
+}
+
 export interface PendingDevice {
   requestId: string;
   deviceId: string;
@@ -64,9 +72,13 @@ export class AuthError extends Error {
 
 async function apiRequest<T>(
   path: string,
-  options: globalThis.RequestInit = {}
+  options: globalThis.RequestInit = {},
 ): Promise<T> {
-  const response = await fetch(`${API_BASE}${path}`, {
+  const url = new URL(`${API_BASE}${path}`, window.location.origin);
+  const token = getGatewayToken();
+  if (token) url.searchParams.set('token', token);
+
+  const response = await fetch(url.toString(), {
     ...options,
     credentials: 'include',
     headers: {
@@ -76,10 +88,14 @@ async function apiRequest<T>(
   } as globalThis.RequestInit);
 
   if (response.status === 401) {
-    throw new AuthError('Unauthorized - please log in via Cloudflare Access');
+    const t = getGatewayToken();
+    if (t) {
+      throw new AuthError('Unauthorized');
+    }
+    throw new AuthError('Unauthorized - missing or invalid ?token=');
   }
 
-  const data = await response.json() as T & { error?: string };
+  const data = (await response.json()) as T & { error?: string };
 
   if (!response.ok) {
     throw new Error(data.error || `API error: ${response.status}`);

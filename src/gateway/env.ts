@@ -1,12 +1,16 @@
 import type { MoltbotEnv } from '../types';
+import type { TenantRuntimeConfig } from '../platform/tenantConfig';
 
 /**
  * Build environment variables to pass to the Moltbot container process
- * 
+ *
  * @param env - Worker environment bindings
  * @returns Environment variables record
  */
-export function buildEnvVars(env: MoltbotEnv): Record<string, string> {
+export function buildEnvVars(
+  env: MoltbotEnv,
+  tenant?: TenantRuntimeConfig,
+): Record<string, string> {
   const envVars: Record<string, string> = {};
 
   // Normalize the base URL by removing trailing slashes
@@ -30,9 +34,8 @@ export function buildEnvVars(env: MoltbotEnv): Record<string, string> {
   if (!envVars.OPENAI_API_KEY && env.OPENAI_API_KEY) {
     envVars.OPENAI_API_KEY = env.OPENAI_API_KEY;
   }
-  if (env.OPENROUTER_API_KEY) {
-    envVars.OPENROUTER_API_KEY = env.OPENROUTER_API_KEY;
-  }
+  const openrouterKey = tenant?.openrouterApiKey || env.OPENROUTER_API_KEY;
+  if (openrouterKey) envVars.OPENROUTER_API_KEY = openrouterKey;
 
   // Pass base URL (used by start-moltbot.sh to determine provider)
   if (normalizedBaseUrl) {
@@ -46,9 +49,16 @@ export function buildEnvVars(env: MoltbotEnv): Record<string, string> {
   } else if (env.ANTHROPIC_BASE_URL) {
     envVars.ANTHROPIC_BASE_URL = env.ANTHROPIC_BASE_URL;
   }
+
   // Map MOLTBOT_GATEWAY_TOKEN to CLAWDBOT_GATEWAY_TOKEN (container expects this name)
-  if (env.MOLTBOT_GATEWAY_TOKEN) envVars.CLAWDBOT_GATEWAY_TOKEN = env.MOLTBOT_GATEWAY_TOKEN;
-  if (env.DEV_MODE) envVars.CLAWDBOT_DEV_MODE = env.DEV_MODE; // Pass DEV_MODE as CLAWDBOT_DEV_MODE to container
+  const gatewayToken = tenant?.gatewayToken || env.MOLTBOT_GATEWAY_TOKEN;
+  if (gatewayToken) envVars.CLAWDBOT_GATEWAY_TOKEN = gatewayToken;
+
+  if (tenant?.slug) envVars.TENANT_SLUG = tenant.slug;
+
+  const devMode = tenant?.devMode ? 'true' : env.DEV_MODE;
+  if (devMode) envVars.CLAWDBOT_DEV_MODE = devMode; // Pass DEV_MODE as CLAWDBOT_DEV_MODE to container
+
   if (env.CLAWDBOT_BIND_MODE) envVars.CLAWDBOT_BIND_MODE = env.CLAWDBOT_BIND_MODE;
   if (env.TELEGRAM_BOT_TOKEN) envVars.TELEGRAM_BOT_TOKEN = env.TELEGRAM_BOT_TOKEN;
   if (env.TELEGRAM_DM_POLICY) envVars.TELEGRAM_DM_POLICY = env.TELEGRAM_DM_POLICY;

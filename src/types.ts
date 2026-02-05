@@ -1,4 +1,5 @@
 import type { Sandbox } from '@cloudflare/sandbox';
+import type { TenantConfigDO, TenantRuntimeConfig } from './platform/tenantConfig';
 
 /**
  * Environment bindings for the Moltbot Worker
@@ -6,10 +7,18 @@ import type { Sandbox } from '@cloudflare/sandbox';
 export interface MoltbotEnv {
   Sandbox: DurableObjectNamespace<Sandbox>;
   ASSETS: Fetcher; // Assets binding for admin UI static files
-  MOLTBOT_BUCKET: R2Bucket; // R2 bucket for persistent storage
+  MOLTBOT_BUCKET?: R2Bucket; // R2 bucket for persistent storage (optional)
+
+  // Multi-tenant platform mode
+  PLATFORM_MODE?: string; // 'true' to enable multi-tenant platform behavior
+  PLATFORM_ADMIN_TOKEN?: string; // Bearer token for /__platform/* routes
+  PUBLIC_DOMAIN?: string; // e.g. workers.openputer.com
+  TENANT_CONFIG?: DurableObjectNamespace<TenantConfigDO>;
+
   // AI Gateway configuration (preferred)
   AI_GATEWAY_API_KEY?: string; // API key for the provider configured in AI Gateway
-  AI_GATEWAY_BASE_URL?: string; // AI Gateway URL (e.g., https://gateway.ai.cloudflare.com/v1/{account_id}/{gateway_id}/anthropic)
+  AI_GATEWAY_BASE_URL?: string; // AI Gateway URL
+
   // Legacy direct provider configuration (fallback)
   ANTHROPIC_API_KEY?: string;
   ANTHROPIC_BASE_URL?: string;
@@ -18,27 +27,30 @@ export interface MoltbotEnv {
   MOLTBOT_GATEWAY_TOKEN?: string; // Gateway token (mapped to CLAWDBOT_GATEWAY_TOKEN for container)
 
   CLAWDBOT_BIND_MODE?: string;
-  DEV_MODE?: string; // Set to 'true' for local dev (skips CF Access auth + moltbot device pairing)
-  E2E_TEST_MODE?: string; // Set to 'true' for E2E tests (skips CF Access auth but keeps device pairing)
-  DEBUG_ROUTES?: string; // Set to 'true' to enable /debug/* routes
-  SANDBOX_SLEEP_AFTER?: string; // How long before sandbox sleeps: 'never' (default), or duration like '10m', '1h'
+  DEV_MODE?: string; // 'true' skips CF Access auth + device pairing
+  E2E_TEST_MODE?: string; // 'true' skips CF Access auth but keeps device pairing
+  DEBUG_ROUTES?: string; // 'true' enables /debug/* routes
+  SANDBOX_SLEEP_AFTER?: string; // 'never' (default) or duration like '10m'
   TELEGRAM_BOT_TOKEN?: string;
   TELEGRAM_DM_POLICY?: string;
   DISCORD_BOT_TOKEN?: string;
   DISCORD_DM_POLICY?: string;
   SLACK_BOT_TOKEN?: string;
   SLACK_APP_TOKEN?: string;
+
   // Cloudflare Access configuration for admin routes
-  CF_ACCESS_TEAM_DOMAIN?: string; // e.g., 'myteam.cloudflareaccess.com'
-  CF_ACCESS_AUD?: string; // Application Audience (AUD) tag
+  CF_ACCESS_TEAM_DOMAIN?: string;
+  CF_ACCESS_AUD?: string;
+
   // R2 credentials for bucket mounting (set via wrangler secret)
   R2_ACCESS_KEY_ID?: string;
   R2_SECRET_ACCESS_KEY?: string;
-  CF_ACCOUNT_ID?: string; // Cloudflare account ID for R2 endpoint
+  CF_ACCOUNT_ID?: string;
+
   // Browser Rendering binding for CDP shim
   BROWSER?: Fetcher;
-  CDP_SECRET?: string; // Shared secret for CDP endpoint authentication
-  WORKER_URL?: string; // Public URL of the worker (for CDP endpoint)
+  CDP_SECRET?: string;
+  WORKER_URL?: string;
 }
 
 /**
@@ -57,6 +69,8 @@ export type AppEnv = {
   Variables: {
     sandbox: Sandbox;
     accessUser?: AccessUser;
+    tenantSlug?: string;
+    tenantConfig?: TenantRuntimeConfig;
   };
 };
 
